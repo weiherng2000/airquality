@@ -5,13 +5,30 @@ import json
 from datetime import datetime, timedelta
 import requests
 import os
+from retry_requests import retry
+import requests_cache
+import openmeteo_requests
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+import tensorflow as tf
+from sklearn.preprocessing import MinMaxScaler, LabelEncoder
+from tensorflow.python.keras.models import load_model
+from tensorflow.python.keras.losses import MeanSquaredError 
+
+
+
+
+
 
 #API code here
+# Setup the Open-Meteo API client with cache and retry on error
+cache_session = requests_cache.CachedSession('.cache', expire_after = 3600)
+retry_session = retry(cache_session, retries = 5, backoff_factor = 0.2)
+openmeteo = openmeteo_requests.Client(session = retry_session)
 
 
-# Get the latest date
-yesterday = (datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')
-start_date = (datetime.today() - timedelta(days=30)).strftime('%Y-%m-%d')
 
 today = datetime.today().strftime('%Y-%m-%d')
 
@@ -27,7 +44,7 @@ def fetch_air_quality_data():
             "latitude": lat,
             "longitude": lon,
             "hourly": ["pm10", "pm2_5", "carbon_monoxide", "nitrogen_dioxide", "sulphur_dioxide", "ozone", "european_aqi", "non_methane_volatile_organic_compounds", "secondary_inorganic_aerosol", "nitrogen_monoxide"],
-            "timezone": "Europe/Warsaw",
+            "timezone": "GMT",
             "start_date": today,
             "end_date": today,
             "domains": "cams_europe"
@@ -60,45 +77,78 @@ def fetch_air_quality_data():
 
 # ✅ **Cache Function for Custom Latitude & Longitude**
 @st.cache_data(ttl=3600)
-def fetch_air_quality_for_custom_location(lat, lon):
-    """Fetch air quality data for any custom location worldwide."""
+def fetch_latest_air_quality(lat, lon):
+    """Fetch the latest air quality data for a given latitude and longitude."""
     url = "https://air-quality-api.open-meteo.com/v1/air-quality"
     params = {
         "latitude": lat,
         "longitude": lon,
         "hourly": [
-            "pm10", "pm2_5", "carbon_monoxide", "nitrogen_dioxide", "sulphur_dioxide", "ozone", 
-            "european_aqi", "non_methane_volatile_organic_compounds", "nitrogen_monoxide", "secondary_inorganic_aerosol"
+            "pm10", "pm2_5", "carbon_monoxide", "carbon_dioxide", "nitrogen_dioxide",
+            "sulphur_dioxide", "ozone", "aerosol_optical_depth", "dust", "ammonia",
+            "methane", "european_aqi", "formaldehyde", "non_methane_volatile_organic_compounds",
+            "peroxyacyl_nitrates", "secondary_inorganic_aerosol", "nitrogen_monoxide"
         ],
-        "timezone": "auto",
+        "timezone": "GMT",
         "start_date": today,
         "end_date": today,
-        "domains": "cams_global"
+        "domains": "cams_europe"
     }
 
-    response = requests.get(url, params=params)
+    # Fetch data from Open-Meteo API
+    responses = openmeteo.weather_api(url, params=params)
+    response = responses[0]  # Process first location
 
-    if response.status_code == 200:
-        data = response.json()
-        if "hourly" in data:
-            hourly_data = data["hourly"]
-            latest_index = -1
+    # Extract hourly data
+    hourly = response.Hourly()
+    hourly_time = pd.date_range(
+        start=pd.to_datetime(hourly.Time(), unit="s", utc=True),
+        end=pd.to_datetime(hourly.TimeEnd(), unit="s", utc=True),
+        freq=pd.Timedelta(seconds=hourly.Interval()),
+        inclusive="left"
+    )
 
-            return {
-                "PM10": hourly_data["pm10"][latest_index],
-                "PM2.5": hourly_data["pm2_5"][latest_index],
-                "CO": hourly_data["carbon_monoxide"][latest_index],
-                "NO2": hourly_data["nitrogen_dioxide"][latest_index],
-                "SO2": hourly_data["sulphur_dioxide"][latest_index],
-                "Ozone": hourly_data["ozone"][latest_index],
-                "AQI": hourly_data["european_aqi"][latest_index],
-                "NMVOC": hourly_data["non_methane_volatile_organic_compounds"][latest_index],
-                "NO": hourly_data["nitrogen_monoxide"][latest_index],
-                "SIA": hourly_data["secondary_inorganic_aerosol"][latest_index]
-            }
-    return None
+    # Create a DataFrame with all hourly data
+    hourly_data = pd.DataFrame({
+        "date": hourly_time,
+        "pm10": hourly.Variables(0).ValuesAsNumpy(),
+        "pm2_5": hourly.Variables(1).ValuesAsNumpy(),
+        "carbon_monoxide": hourly.Variables(2).ValuesAsNumpy(),
+        "carbon_dioxide": hourly.Variables(3).ValuesAsNumpy(),
+        "nitrogen_dioxide": hourly.Variables(4).ValuesAsNumpy(),
+        "sulphur_dioxide": hourly.Variables(5).ValuesAsNumpy(),
+        "ozone": hourly.Variables(6).ValuesAsNumpy(),
+        "aerosol_optical_depth": hourly.Variables(7).ValuesAsNumpy(),
+        "dust": hourly.Variables(8).ValuesAsNumpy(),
+        "ammonia": hourly.Variables(9).ValuesAsNumpy(),
+        "methane": hourly.Variables(10).ValuesAsNumpy(),
+        "european_aqi": hourly.Variables(11).ValuesAsNumpy(),
+        "formaldehyde": hourly.Variables(12).ValuesAsNumpy(),
+        "non_methane_volatile_organic_compounds": hourly.Variables(13).ValuesAsNumpy(),
+        "peroxyacyl_nitrates": hourly.Variables(14).ValuesAsNumpy(),
+        "secondary_inorganic_aerosol": hourly.Variables(15).ValuesAsNumpy(),
+        "nitrogen_monoxide": hourly.Variables(16).ValuesAsNumpy()
+    })
 
+    # ✅ Get the latest available data (most recent timestamp)
+    latest_index = -1  # Last row contains the latest available data
+    latest_data = hourly_data.iloc[latest_index]  # Extract last row
 
+    # ✅ Return the latest data as a dictionary
+    return {
+        "Date": latest_data["date"],
+        "PM10": round(latest_data["pm10"], 1),
+        "PM2.5": round(latest_data["pm2_5"], 1),
+        "CO": round(latest_data["carbon_monoxide"], 1),
+        "CO2": round(latest_data["carbon_dioxide"], 1),
+        "NO2": round(latest_data["nitrogen_dioxide"], 1),
+        "SO2": round(latest_data["sulphur_dioxide"], 1),
+        "Ozone": round(latest_data["ozone"], 1),
+        "AQI": round(latest_data["european_aqi"], 0),  # 🔥 Whole number (0 dp)
+        "NMVOC": round(latest_data["non_methane_volatile_organic_compounds"], 1),
+        "NO": round(latest_data["nitrogen_monoxide"], 1),
+        "SIA": round(latest_data["secondary_inorganic_aerosol"], 1)
+    }
 # District Coordinates Mapping
 coordinates_mapping = {
     'Bemowo': (52.2545, 20.9110),
@@ -114,77 +164,178 @@ coordinates_mapping = {
 }
 
 
+def fetch_district_data(district):
+    """Fetch hourly air quality data for a given district."""
+    if district not in coordinates_mapping:
+        raise ValueError(f"Invalid district: {district}. Available districts: {list(coordinates_mapping.keys())}")
+
+    latitude, longitude = coordinates_mapping[district]
+
+    # ✅ Get date ranges
+    yesterday = (datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')
+    start_date = (datetime.today() - timedelta(days=30)).strftime('%Y-%m-%d')
+
+    # ✅ API request parameters
+    url = "https://air-quality-api.open-meteo.com/v1/air-quality"
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "hourly": [
+            "pm10", "pm2_5", "carbon_monoxide", "nitrogen_dioxide", "sulphur_dioxide",
+            "ozone", "european_aqi", "non_methane_volatile_organic_compounds",
+            "secondary_inorganic_aerosol", "nitrogen_monoxide"
+        ],
+        "timezone": "Asia/Singapore",
+        "start_date": start_date,
+        "end_date": yesterday,
+        "domains": "cams_europe"
+    }
+
+    # ✅ Fetch data from Open-Meteo API
+    responses = openmeteo.weather_api(url, params=params)
+    response = responses[0]  # Process first location
+
+    # ✅ Process hourly data
+    hourly = response.Hourly()
+    hourly_data = {
+        "date": pd.date_range(
+            start=pd.to_datetime(hourly.Time(), unit="s", utc=True),
+            end=pd.to_datetime(hourly.TimeEnd(), unit="s", utc=True),
+            freq=pd.Timedelta(seconds=hourly.Interval()),
+            inclusive="left"
+        ),
+        "pm10": hourly.Variables(0).ValuesAsNumpy(),
+        "pm2_5": hourly.Variables(1).ValuesAsNumpy(),
+        "carbon_monoxide": hourly.Variables(2).ValuesAsNumpy(),
+        "nitrogen_dioxide": hourly.Variables(3).ValuesAsNumpy(),
+        "sulphur_dioxide": hourly.Variables(4).ValuesAsNumpy(),
+        "ozone": hourly.Variables(5).ValuesAsNumpy(),
+        "european_aqi": hourly.Variables(6).ValuesAsNumpy(),
+        "non_methane_volatile_organic_compounds": hourly.Variables(7).ValuesAsNumpy(),
+        "secondary_inorganic_aerosol": hourly.Variables(8).ValuesAsNumpy(),
+        "nitrogen_monoxide": hourly.Variables(9).ValuesAsNumpy()
+    }
+
+    # ✅ Convert to DataFrame
+    hourly_dataframe = pd.DataFrame(data=hourly_data)
+    
+    return hourly_dataframe
+
+def convert_hourly_to_daily(df,district):
+
+    # Ensure 'date' is in datetime format
+    if not pd.api.types.is_datetime64_any_dtype(df["date"]):
+        df["date"] = pd.to_datetime(df["date"])
+
+    # Remove time portion (keep only the date)
+    df["date"] = df["date"].dt.date
+
+    # Aggregate by date (Compute daily mean for all numeric columns)
+    daily_df = df.groupby("date").mean().reset_index()
+
+    daily_df["district"] = district
+
+    return daily_df
+
 
 # User interface code here
 
 # Set page layout
 st.set_page_config(layout="wide")
 
+# Create Tabs
+tab1, tab2 = st.tabs(["🌍 Map View", "📈 Forecast Graph"])
+
 # Sidebar
-st.sidebar.header("Map Options")
+st.sidebar.header("Options")
 
 # Default map center (Example: Warsaw)
-default_lat = 52.2298
-default_lon = 21.0122
+default_lat, default_lon = 52.2298, 21.0122  # Warsaw center
 zoom_level = 12
 
 # Sidebar for User Input (Custom Location)
 st.sidebar.header("Enter Custom Location")
-user_lat = st.sidebar.number_input("Latitude", value=default_lat, format="%.6f")
-user_lon = st.sidebar.number_input("Longitude", value=default_lon, format="%.6f")
+user_lat = st.sidebar.number_input(
+    "Latitude", 
+    min_value=-90.000000,  # Minimum allowed latitude
+    max_value=90.000000,   # Maximum allowed latitude
+    value=default_lat, 
+    format="%.6f"
+)
 
-if "show_data" not in st.session_state:
-    st.session_state.show_data = False  # Initially hidden
+user_lon = st.sidebar.number_input(
+    "Longitude", 
+    min_value=-180.000000,  # Minimum allowed longitude
+    max_value=180.000000,   # Maximum allowed longitude
+    value=default_lon, 
+    format="%.6f"
+)
 
-if "map_center" not in st.session_state:
-    st.session_state.map_center = [user_lat, user_lon]  # Default to Warsaw
+if "show_custom_location" not in st.session_state:
+    st.session_state.show_custom_location = False
 
-# Button to Toggle Air Quality Data
-if st.sidebar.button("Toggle Air Quality Data"):
-    st.session_state.show_data = not st.session_state.show_data  # Toggle state
-
-    # If toggled ON, move the map center to the new location
-    if st.session_state.show_data:
-        st.session_state.map_center = [user_lat, user_lon]
+if "show_geojson" not in st.session_state:
+    st.session_state.show_geojson = False
 
 
-# ✅ **Fetch Cached Air Quality Data Once Per Session**
-air_quality_data = fetch_air_quality_data()
+# Buttons to toggle map layers
+if st.sidebar.button("Show Current Location Data"):
+    st.session_state.show_custom_location = True
+    st.session_state.show_geojson = False
+    st.session_state.map_center = [user_lat, user_lon]
 
-custom_location_data = fetch_air_quality_for_custom_location(user_lat, user_lon) if st.session_state.show_data else None
+if st.sidebar.button("Show Warsaw Heatmap"):
+    st.session_state.show_geojson = True
+    st.session_state.show_custom_location = False
+    st.session_state.map_center = [default_lat, default_lon]
+    
+
+
 
 # ✅ Create the Map Centered on Warsaw
-m = folium.Map(location=[default_lat, default_lon], zoom_start=zoom_level)
+map_center = st.session_state.get("map_center", [default_lat, default_lon])
+m = folium.Map(location= map_center, zoom_start=zoom_level)
+
+
+
 
 # ✅ Add Markers for Custom Location
-if st.session_state.show_data  and custom_location_data:
+# Show custom location data
+if st.session_state.show_custom_location:
+    custom_location_data = fetch_latest_air_quality(user_lat, user_lon)
+
     popup_html = f"""
     <b>🌍 Custom Location: ({user_lat}, {user_lon})</b><br>
     📅 <b>Date:</b> {today}<br>
-    🏭 <b>AQI:</b> {custom_location_data["AQI"]}<br>
-    🏭 <b>PM10:</b> {custom_location_data["PM10"]} µg/m³<br>
-    ☁️ <b>PM2.5:</b> {custom_location_data["PM2.5"]} µg/m³<br>
-    💨 <b>CO:</b> {custom_location_data["CO"]} ppm<br>
-    ⚠️ <b>NO2:</b> {custom_location_data["NO2"]} ppm<br>
-    ⚠️ <b>SO2:</b> {custom_location_data["SO2"]} ppm<br>
-    🌞 <b>Ozone:</b> {custom_location_data["Ozone"]} ppm<br>
-    🏭 <b>NMVOC:</b> {custom_location_data["NMVOC"]} ppm<br>
-    ⚠️ <b>NO:</b> {custom_location_data["NO"]} ppm<br>
-    🏭 <b>SIA:</b> {custom_location_data["SIA"]} µg/m³<br>
+    🏭 <b>AQI:</b> {custom_location_data["AQI"]:.0f}<br>  <!-- Whole number -->
+    🏭 <b>PM10:</b> {custom_location_data["PM10"]:.1f} µg/m³<br>
+    ☁️ <b>PM2.5:</b> {custom_location_data["PM2.5"]:.1f} µg/m³<br>
+    💨 <b>CO:</b> {custom_location_data["CO"]:.1f} ppm<br>
+    ⚠️ <b>NO2:</b> {custom_location_data["NO2"]:.1f} ppm<br>
+    ⚠️ <b>SO2:</b> {custom_location_data["SO2"]:.1f} ppm<br>
+    🌞 <b>Ozone:</b> {custom_location_data["Ozone"]:.1f} ppm<br>
+    🏭 <b>NMVOC:</b> {custom_location_data["NMVOC"]:.1f} ppm<br>
+    ⚠️ <b>NO:</b> {custom_location_data["NO"]:.1f} ppm<br>
+    🏭 <b>SIA:</b> {custom_location_data["SIA"]:.1f} µg/m³<br>
     """
+
+    popup = folium.Popup(popup_html, max_width=300)
+
     folium.Marker(
         [user_lat, user_lon],
-        popup=folium.Popup(popup_html, max_width=300),
+        popup = popup,
         tooltip="Click for Air Quality Data",
         icon=folium.Icon(color="blue", icon="cloud"),
     ).add_to(m)
 
 
-# ✅ Load and Display the Preloaded GeoJSON File
-geojson_file_path = "map.geojson"
+# Show preloaded GeoJSON
+if st.session_state.show_geojson:
+    geojson_file_path = "map.geojson"
+    air_quality_data = fetch_air_quality_data()
 
-if os.path.exists(geojson_file_path) and not st.session_state.show_data :
-    try:
+
+    if os.path.exists(geojson_file_path):
         with open(geojson_file_path, "r", encoding="utf-8") as file:
             geojson_data = json.load(file)
 
@@ -193,7 +344,8 @@ if os.path.exists(geojson_file_path) and not st.session_state.show_data :
             return {
                 "color": "black",  # Outline only
                 "weight": 2,
-                "fillOpacity": 0  # No fill color
+                "fillOpacity": 0  # No fill color,
+                
             }
 
         def highlight_function(feature):
@@ -203,13 +355,12 @@ if os.path.exists(geojson_file_path) and not st.session_state.show_data :
                 "fillOpacity": 0.1
             }
 
-        # Loop through each district in the GeoJSON file
         for feature in geojson_data["features"]:
             district_name = feature["properties"].get("district_name", "Unknown")
             air_quality = air_quality_data.get(district_name)
+            
 
-            if air_quality:
-                popup_html = f"""
+            popup_html = f"""
                 <b>🌆 {district_name} - {today}</b><br>
                 🏭 <b>AQI:</b> {air_quality["AQI"]}<br>
                 🏭 <b>PM10:</b> {air_quality["PM10"]} µg/m³<br>
@@ -222,11 +373,9 @@ if os.path.exists(geojson_file_path) and not st.session_state.show_data :
                 ⚠️ <b>NO:</b> {air_quality["NO"]} ppm<br>
                 🏭 <b>SIA:</b> {air_quality["SIA"]} µg/m³<br>
                 """
-            else:
-                popup_html = f"<b>🌆 {district_name}</b><br>No data available"
-
+            
             popup = folium.Popup(popup_html, max_width=300)
-
+            
             folium.GeoJson(
                 feature,
                 name="Preloaded GeoJSON",
@@ -236,14 +385,112 @@ if os.path.exists(geojson_file_path) and not st.session_state.show_data :
                 highlight_function=highlight_function
             ).add_to(m)
 
-        st.success("✅ Preloaded GeoJSON file loaded successfully!")
-        # ✅ Display the Map in Streamlit
+                
 
-    except json.JSONDecodeError:
-        st.error("⚠️ Error decoding GeoJSON file. Check the format.")
 
-else:
-    st.error(f"⚠️ GeoJSON file '{geojson_file_path}' not found.")
+            
+    else:
+        st.error(f"GeoJSON file '{geojson_file_path}' not found.")
 
-st.title("📍 Interactive Air Quality Map of Warsaw (Today's Data, Cached)")
-st_folium(m, width=900, height=600)
+with tab1:
+    st.title("📍 Interactive Air Quality Map ")
+    st_folium(m, width=900, height=600)
+
+with tab2:
+    selected_district = st.selectbox("Select a district : " , list (coordinates_mapping))
+
+
+    # ✅ Button to fetch data
+    if st.button("Analyse"):
+        
+        # ✅ Fetch and display data
+        hourly_dataframe =  fetch_district_data(selected_district)
+
+        daily_data = convert_hourly_to_daily(hourly_dataframe,selected_district)
+
+        # Encode district names into numerical values
+        label_encoder = LabelEncoder()
+        daily_data["district_id"] = label_encoder.fit_transform(daily_data["district"])
+
+        # Normalize numerical features
+        features = ["pm10", "pm2_5", "carbon_monoxide", "nitrogen_dioxide",
+                    "sulphur_dioxide", "ozone",
+                    "non_methane_volatile_organic_compounds",
+                    "secondary_inorganic_aerosol", "nitrogen_monoxide", "european_aqi"]
+
+        scaler = MinMaxScaler()
+        daily_data[features] = scaler.fit_transform(daily_data[features])
+
+
+        model = tf.keras.models.load_model("lstm_air_quality_model.h5",  compile=False)
+        model.compile(optimizer= "adam", loss=MeanSquaredError(), metrics=["mae"])
+
+        def predict_next_30_days(district_name, model, label_encoder, scaler, seq_length=30):
+            """
+            Predicts the next 30 days of AQI for a given district using the past 30 days of data.
+
+            Args:
+                district_name (str): The name of the district.
+                model (Keras Model): The trained LSTM-GRU model.
+                label_encoder (LabelEncoder): Encoder for district names.
+                scaler (MinMaxScaler): Scaler used for data normalization.
+                seq_length (int): Number of past days to use for prediction (default: 30).
+
+            Returns:
+                list: Predicted AQI values for the next 30 days.
+            """
+            # Convert district name to numerical ID
+            district_id = label_encoder.transform([district_name])[0]
+
+            # Get the last 90 days of air quality data
+            last_30_days = daily_data[daily_data["district_id"] == district_id][features].iloc[-seq_length:].values
+            last_30_days = last_30_days.reshape(1, seq_length, len(features))  # Reshape for model input
+
+            # Store predictions
+            future_predictions = []
+
+            for _ in range(30):  # Predict for 30 days
+                # Predict AQI
+                prediction = model.predict([last_30_days, np.array([[district_id]])])
+
+                # Ensure prediction has the correct shape
+                predicted_aqi_scaled = np.zeros((1, len(features)))
+                predicted_aqi_scaled[0, -1] = prediction[0][0]  # Insert prediction into last column
+
+                # Convert back to original scale
+                predicted_aqi = scaler.inverse_transform(predicted_aqi_scaled)[0, -1]
+                future_predictions.append(predicted_aqi)
+
+                # Create a new feature row with predicted AQI
+                new_row = np.copy(last_30_days[:, -1, :])  # Copy the last day data
+                new_row[:, -1] = predicted_aqi_scaled[0, -1]  # Replace AQI column with predicted value
+
+                # Reshape and append to last_90_days
+                new_row = new_row.reshape(1, 1, len(features))  # Ensure shape is (1, 1, num_features)
+                last_30_days = np.concatenate((last_30_days[:, 1:, :], new_row), axis=1)  # Slide window forward
+
+            return future_predictions
+
+        predicted_30_days = predict_next_30_days(selected_district, model, label_encoder, scaler)
+        
+        # Generate the days for x-axis
+        days = np.arange(1, 31)
+
+        # Create the figure
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(days, predicted_30_days, marker='o', linestyle='-', color='b', label='Predicted AQI')
+
+        # Customize the graph
+        ax.set_xlabel("Days")
+        ax.set_ylabel("Predicted AQI")
+        ax.set_title("Predicted AQI for the Next 30 Days")
+        ax.grid(True, linestyle='--', alpha=0.6)
+        ax.legend()
+        ax.set_ylim(min(predicted_30_days) - 5, max(predicted_30_days) + 5)
+
+        # Show the plot in Streamlit
+        st.pyplot(fig)
+                        
+
+        
+
