@@ -17,7 +17,6 @@ from sklearn.preprocessing import MinMaxScaler, LabelEncoder
 from tensorflow.python.keras.models import load_model
 from tensorflow.python.keras.losses import MeanSquaredError 
 
-import openai
 
 
 
