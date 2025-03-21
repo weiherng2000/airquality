@@ -17,6 +17,8 @@ from sklearn.preprocessing import MinMaxScaler, LabelEncoder
 from tensorflow.python.keras.models import load_model
 from tensorflow.python.keras.losses import MeanSquaredError 
 
+import openai
+
 
 
 
@@ -236,6 +238,65 @@ def convert_hourly_to_daily(df,district):
     daily_df["district"] = district
 
     return daily_df
+
+# Function to generate detailed AQI comments based on the new classification
+def generate_aqi_comment(median_aqi):
+    if median_aqi <= 25:
+        return f"""
+        **🟢 Classification:** Very Low  
+        **📊 Median AQI:** {median_aqi:.1f}  
+        **💨 Health Impact:** Air quality is excellent, with no health risks to the population.  
+        **👥 Advice for General Population:** No restrictions; outdoor activities are highly encouraged.  
+        **⚠️ Advice for Vulnerable Groups (Children, elderly, and those with respiratory conditions):** No precautions necessary; enjoy outdoor activities.
+        """
+    
+    elif median_aqi <= 50:
+        return f"""
+        **🟢 Classification:** Low  
+        **📊 Median AQI:** {median_aqi:.1f}  
+        **💨 Health Impact:** Air quality is good, with minimal risk for the general population.  
+        **👥 Advice for General Population:** Outdoor activities are safe and recommended.  
+        **⚠️ Advice for Vulnerable Groups:** No restrictions, but individuals with extreme sensitivity should monitor for symptoms.
+        """
+    
+    elif median_aqi <= 75:
+        return f"""
+        **🟡 Classification:** Medium  
+        **📊 Median AQI:** {median_aqi:.1f}  
+        **💨 Health Impact:** Air quality is acceptable, but there may be minor effects for sensitive individuals.  
+        **👥 Advice for General Population:** Most people can continue normal activities without concern.  
+        **⚠️ Advice for Vulnerable Groups:** Individuals with respiratory conditions should take short breaks from prolonged outdoor activities.
+        """
+    
+    elif median_aqi <= 100:
+        return f"""
+        **🟠 Classification:** High  
+        **📊 Median AQI:** {median_aqi:.1f}  
+        **💨 Health Impact:** Some people may experience mild discomfort, such as throat irritation or coughing.  
+        **👥 Advice for General Population:** Outdoor activities are still safe, but people with health conditions should take precautions.  
+        **⚠️ Advice for Vulnerable Groups:** Avoid prolonged outdoor exertion; wear a mask if necessary.
+        """
+    
+    else:
+        return f"""
+        **🔴 Classification:** Very High  
+        **📊 Median AQI:** {median_aqi:.1f}  
+        **💨 Health Impact:** Air pollution levels are concerning; everyone may experience health effects, especially sensitive individuals.  
+        **👥 Advice for General Population:** Limit outdoor activities, especially strenuous exercise. Consider wearing a mask if staying outdoors.  
+        **⚠️ Advice for Vulnerable Groups:** Stay indoors with windows closed; use air purifiers if possible. Seek medical attention if experiencing breathing difficulties.
+        """
+    
+def get_aqi_color(aqi):
+    if aqi <= 25:
+        return "🟢"  # Very Low (Green)
+    elif aqi <= 50:
+        return "🟢"  # Low (Lighter Green)
+    elif aqi <= 75:
+        return "🟡"  # Medium (Yellow)
+    elif aqi <= 100:
+        return "🟠"  # High (Orange)
+    else:
+        return "🔴"  # Very High (Red)
 
 
 # User interface code here
@@ -490,7 +551,43 @@ with tab2:
 
         # Show the plot in Streamlit
         st.pyplot(fig)
-                        
+
+        
+        # Calculate Average AQI
+        median_aqi = round(np.median(predicted_30_days))
+        aqi_comment = generate_aqi_comment(median_aqi)
+        aqi_color = get_aqi_color(median_aqi)
+
+
+        st.markdown("""
+        ### 🌍 European AQI Scale 
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="flex: 1; text-align: center; padding: 10px; background-color: green; color: white; ">
+                0 - 25
+            </div>
+            <div style="flex: 1; text-align: center; padding: 10px; background-color: lightgreen; color: black; ">
+                26 - 50
+            </div>
+            <div style="flex: 1; text-align: center; padding: 10px; background-color: yellow; color: black; ">
+                51 - 75
+            </div>
+            <div style="flex: 1; text-align: center; padding: 10px; background-color: orange; color: black; ">
+                76 - 100
+            </div>
+            <div style="flex: 1; text-align: center; padding: 10px; background-color: red; color: white; ">
+                101+
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Display Median AQI with Color Code
+        st.subheader("📊 Median AQI Level")
+        st.markdown(f"<h2 style='text-align: center;'>{aqi_color} {int(median_aqi)}</h2>", unsafe_allow_html=True)
+
+        # Display AQI Comment
+        st.subheader("💬 Air Quality Analysis")
+        st.write(aqi_comment)
+            
 
         
 
