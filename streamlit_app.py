@@ -44,7 +44,7 @@ def fetch_air_quality_data():
         params = {
             "latitude": lat,
             "longitude": lon,
-            "hourly": ["pm10", "pm2_5", "carbon_monoxide", "nitrogen_dioxide", "sulphur_dioxide", "ozone", "european_aqi", "non_methane_volatile_organic_compounds", "secondary_inorganic_aerosol", "nitrogen_monoxide"],
+            "hourly": ["pm10", "pm2_5", "carbon_monoxide", "nitrogen_dioxide", "sulphur_dioxide", "ozone", "european_aqi", "non_methane_volatile_organic_compounds", "secondary_inorganic_aerosol", "nitrogen_monoxide","ammonia"],
             "timezone": "GMT",
             "start_date": today,
             "end_date": today
@@ -68,7 +68,8 @@ def fetch_air_quality_data():
                     "AQI": hourly_data["european_aqi"][latest_index],
                     "NMVOC": hourly_data["non_methane_volatile_organic_compounds"][latest_index],
                     "NO": hourly_data["nitrogen_monoxide"][latest_index],
-                    "SIA": hourly_data["secondary_inorganic_aerosol"][latest_index]
+                    "SIA": hourly_data["secondary_inorganic_aerosol"][latest_index],
+                    "NH3" : hourly_data["ammonia"][latest_index]
                 }
         else:
             district_data[district_name] = None  # No data available
@@ -146,7 +147,8 @@ def fetch_latest_air_quality(lat, lon):
         "AQI": round(latest_data["european_aqi"], 0),  # 🔥 Whole number (0 dp)
         "NMVOC": round(latest_data["non_methane_volatile_organic_compounds"], 1),
         "NO": round(latest_data["nitrogen_monoxide"], 1),
-        "SIA": round(latest_data["secondary_inorganic_aerosol"], 1)
+        "SIA": round(latest_data["secondary_inorganic_aerosol"], 1),
+        "NH3" : round(latest_data["ammonia"], 1)
     }
 # District Coordinates Mapping
 coordinates_mapping = {
@@ -182,7 +184,7 @@ def fetch_district_data(district):
         "hourly": [
             "pm10", "pm2_5", "carbon_monoxide", "nitrogen_dioxide", "sulphur_dioxide",
             "ozone", "european_aqi", "non_methane_volatile_organic_compounds",
-            "secondary_inorganic_aerosol", "nitrogen_monoxide"
+            "secondary_inorganic_aerosol", "nitrogen_monoxide" , "ammonia"
         ],
         "timezone": "Asia/Singapore",
         "start_date": start_date,
@@ -212,7 +214,8 @@ def fetch_district_data(district):
         "european_aqi": hourly.Variables(6).ValuesAsNumpy(),
         "non_methane_volatile_organic_compounds": hourly.Variables(7).ValuesAsNumpy(),
         "secondary_inorganic_aerosol": hourly.Variables(8).ValuesAsNumpy(),
-        "nitrogen_monoxide": hourly.Variables(9).ValuesAsNumpy()
+        "nitrogen_monoxide": hourly.Variables(9).ValuesAsNumpy(),
+        "ammonia": hourly.Variables(10).ValuesAsNumpy()
     }
 
     # ✅ Convert to DataFrame
@@ -377,6 +380,7 @@ if st.session_state.show_custom_location:
     🏭 <b>NMVOC:</b> {custom_location_data["NMVOC"]:.1f} ppm<br>
     ⚠️ <b>NO:</b> {custom_location_data["NO"]:.1f} ppm<br>
     🏭 <b>SIA:</b> {custom_location_data["SIA"]:.1f} µg/m³<br>
+    ⚠️ <b>NH3:</b> {custom_location_data["NH3"]:.1f} ppm<br>
     """
 
     popup = folium.Popup(popup_html, max_width=300)
@@ -432,6 +436,7 @@ if st.session_state.show_geojson:
                 🏭 <b>NMVOC:</b> {air_quality["NMVOC"]} ppm<br>
                 ⚠️ <b>NO:</b> {air_quality["NO"]} ppm<br>
                 🏭 <b>SIA:</b> {air_quality["SIA"]} µg/m³<br>
+                🏭 <b>NH3:</b> {air_quality["NH3"]} µg/m³<br>
                 """
             
             popup = folium.Popup(popup_html, max_width=300)
