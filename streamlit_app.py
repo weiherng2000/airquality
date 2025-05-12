@@ -47,8 +47,7 @@ def fetch_air_quality_data():
             "hourly": ["pm10", "pm2_5", "carbon_monoxide", "nitrogen_dioxide", "sulphur_dioxide", "ozone", "european_aqi", "non_methane_volatile_organic_compounds", "secondary_inorganic_aerosol", "nitrogen_monoxide"],
             "timezone": "GMT",
             "start_date": today,
-            "end_date": today,
-            "domains": "cams_europe"
+            "end_date": today
         }
 
         response = requests.get(url, params=params)
@@ -92,8 +91,7 @@ def fetch_latest_air_quality(lat, lon):
         ],
         "timezone": "GMT",
         "start_date": today,
-        "end_date": today,
-        "domains": "cams_europe"
+        "end_date": today
     }
 
     # Fetch data from Open-Meteo API
@@ -363,6 +361,8 @@ m = folium.Map(location= map_center, zoom_start=zoom_level)
 # Show custom location data
 if st.session_state.show_custom_location:
     custom_location_data = fetch_latest_air_quality(user_lat, user_lon)
+
+    print(custom_location_data)
 
     popup_html = f"""
     <b>🌍 Custom Location: ({user_lat}, {user_lon})</b><br>
